@@ -144,6 +144,218 @@ static UINT __stdcall uv__thread_start(void* arg) {
   return 0;
 }
 
+#define USE_USER_MODE_SCHEDUING
+#ifdef USE_USER_MODE_SCHEDUING
+#define UMS_NUM_THREADS_PER_SCHEDULER 8 //need to pick a better number probably
+
+#if 1 /* These items should be included from Windows.h */
+typedef void *PUMS_COMPLETION_LIST;
+typedef void *PUMS_CONTEXT;
+#define RTL_UMS_VERSION  (0x0100) 
+#define UMS_VERSION RTL_UMS_VERSION
+#define PROC_THREAD_ATTRIBUTE_UMS_THREAD ProcThreadAttributeValue (6, TRUE, TRUE, FALSE)
+
+typedef enum _RTL_UMS_SCHEDULER_REASON UMS_SCHEDULER_REASON;
+
+typedef struct _UMS_THREAD_RING {
+  PUMS_CONTEXT contextRing[UMS_NUM_THREADS_PER_SCHEDULER];
+  int readCount;
+  int writeCount;
+} UMS_THREAD_RING, *PUMS_THREAD_RING;
+
+typedef PRTL_UMS_SCHEDULER_ENTRY_POINT PUMS_SCHEDULER_ENTRY_POINT;
+
+typedef struct _UMS_SCHEDULER_STARTUP_INFO {
+  ULONG                      UmsVersion;
+  PUMS_COMPLETION_LIST       CompletionList;
+  PUMS_SCHEDULER_ENTRY_POINT SchedulerProc;
+  PVOID                      SchedulerParam;
+} UMS_SCHEDULER_STARTUP_INFO, *PUMS_SCHEDULER_STARTUP_INFO;
+
+typedef struct _UMS_SCHEDULER_CONTEXT {
+  UMS_SCHEDULER_STARTUP_INFO startupInfo;
+  HANDLE completionListEvent;
+  UMS_THREAD_RING threadRing;
+} UMS_SCHEDULER_CONTEXT, *PUMS_SCHEDULER_CONTEXT;
+
+WINBASEAPI BOOL WINAPI CreateUmsThreadContext(_Outptr_ PUMS_CONTEXT *lpUmsThread);
+WINBASEAPI BOOL WINAPI DequeueUmsCompletionListItems(_In_ PUMS_COMPLETION_LIST UmsCompletionList, _In_ DWORD WaitTimeOut, _Out_ PUMS_CONTEXT* UmsThreadList);
+WINBASEAPI PUMS_CONTEXT WINAPI GetNextUmsListItem(_Inout_ PUMS_CONTEXT UmsContext);
+WINBASEAPI BOOL WINAPI CreateUmsCompletionList(_Outptr_ PUMS_COMPLETION_LIST* UmsCompletionList);
+WINBASEAPI BOOL WINAPI GetUmsCompletionListEvent(_In_ PUMS_COMPLETION_LIST UmsCompletionList, _Inout_ PHANDLE UmsCompletionEvent);
+WINBASEAPI BOOL WINAPI EnterUmsSchedulingMode(_In_ PUMS_SCHEDULER_STARTUP_INFO SchedulerStartupInfo);
+WINBASEAPI BOOL WINAPI DeleteUmsCompletionList(_In_ PUMS_COMPLETION_LIST UmsCompletionList);
+WINBASEAPI BOOL WINAPI ExecuteUmsThread(_Inout_ PUMS_CONTEXT UmsThread);
+#endif /* These items should be included from Windows.h */
+
+HANDLE begin_ums_worker_thread(PUMS_COMPLETION_LIST CompletionList, unsigned ( __stdcall *start_address )( void * ), void *arglist, unsigned initflag) {
+  SIZE_T lpSize=0;
+  PUMS_CONTEXT tContext=0;
+  CreateUmsThreadContext(&tContext);
+
+  LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList = NULL;
+
+  InitializeProcThreadAttributeList(lpAttributeList, 1, 0, &lpSize);
+  lpAttributeList=(LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), HEAP_GENERATE_EXCEPTIONS|HEAP_ZERO_MEMORY, lpSize);
+  InitializeProcThreadAttributeList(lpAttributeList, 1, 0, &lpSize);
+
+  UMS_CREATE_THREAD_ATTRIBUTES threadAttributes;
+  threadAttributes.UmsVersion=UMS_VERSION;
+  threadAttributes.UmsContext=tContext;
+  threadAttributes.UmsCompletionList=CompletionList;
+
+  UpdateProcThreadAttribute(lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_UMS_THREAD, &threadAttributes, sizeof(threadAttributes), NULL, NULL);
+
+  HANDLE rt1=CreateRemoteThreadEx(GetCurrentProcess(), NULL, 0, start_address, arglist, initflag, lpAttributeList, NULL);
+
+  DeleteProcThreadAttributeList(lpAttributeList);
+
+  HeapFree(GetProcessHeap(), 0, lpAttributeList); lpAttributeList=NULL;
+
+  return rt1;
+}
+
+void addToThreadRing(PUMS_CONTEXT UmsThreadContext, PUMS_THREAD_RING threadRing) {
+  // not thread safe, each scheduler thread has its own
+  // can be made thread safe with critial section, or lock, etc
+  threadRing->contextRing[(threadRing->writeCount++) % UMS_NUM_THREADS_PER_SCHEDULER] = UmsThreadContext;
+}
+
+PUMS_CONTEXT removeFromThreadRing(PUMS_THREAD_RING threadRing) {
+  // not thread safe, each scheduler thread has its own
+  // can be made thread safe with critial section, or lock, etc
+  if(threadRing->readCount < threadRing->writeCount) {
+    return threadRing->contextRing[(threadRing->readCount++) % UMS_NUM_THREADS_PER_SCHEDULER];
+  } else {
+    return NULL;
+  }
+}
+
+void dequeueToThreadRing(PUMS_COMPLETION_LIST CompletionList, PUMS_THREAD_RING threadRing) {
+  PUMS_CONTEXT UmsThreadList = NULL;
+  if(!DequeueUmsCompletionListItems(CompletionList, INFINITE, &UmsThreadList)) return;
+  while(UmsThreadList) {
+    addToThreadRing(UmsThreadList, threadRing);
+    UmsThreadList = GetNextUmsListItem(UmsThreadList);
+  }
+}
+
+void schedulerCallback(UMS_SCHEDULER_REASON Reason, ULONG_PTR ActivationPayload, PVOID SchedulerParam, PUMS_SCHEDULER_CONTEXT schedulerContext) {
+/*
+  Called when scheduler starts, a thread blocks, or a thread yields.
+  See UmsSchedulerProc callback function https://msdn.microsoft.com/en-us/library/windows/desktop/dd627182(v=vs.85).aspx
+*/
+
+/*
+  switch(Reason) {
+  case UmsSchedulerStartup:       //TODO do some initialization
+  case UmsSchedulerThreadBlocked: //TODO do something
+  case UmsSchedulerThreadYield:   //TODO put into specific yield queue
+  }
+*/
+
+  for(;;) {
+    PUMS_CONTEXT threadContext = removeFromThreadRing(&schedulerContext->threadRing);
+    if(threadContext) {
+      ExecuteUmsThread(threadContext);
+      //TODO check for status and handle it
+    }
+
+    DWORD waitStatus = WaitForSingleObjectEx(schedulerContext->completionListEvent, INFINITE, TRUE);
+
+    switch(waitStatus) {
+    case WAIT_OBJECT_0:
+      dequeueToThreadRing(schedulerContext->startupInfo.CompletionList, &schedulerContext->threadRing);
+      break;
+
+    case WAIT_ABANDONED: //TODO handle error cases
+      DebugBreak();
+      break;
+
+    case WAIT_IO_COMPLETION: //TODO handle error cases
+      DebugBreak();
+      break;
+
+    case WAIT_TIMEOUT: //TODO handle error cases
+      DebugBreak();
+      break;
+
+    case WAIT_FAILED: //TODO handle error cases
+      DebugBreak();
+      break;
+
+    default: //TODO handle error cases
+      DebugBreak();
+      break;
+    }
+  }
+  DebugBreak(); //TODO handle error cases
+}
+
+void *x64_bind_4th_arg(void *proc, void *fouthArg) {
+  /*
+    Quick and dirty attempt to replace C++ funtional binding in plain C, using the binary of x64 assembly.
+    Please let me know if there is a proper way to do this. But, it was faster to do this than find a better solution for now.
+  */
+
+  /*
+    [offset] [      bytes       ]    [          instruction          ]
+    00000000 48B8_____proc_______    mov rax, qword 0x_____proc_______
+    0000000A 49B9____fouthArg____    mov  r9, qword 0x____fouthArg____
+    00000014 FFE0                    jmp rax
+  */
+
+  unsigned char *callPtr = VirtualAlloc(0, 22, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+  callPtr[0x00] = 0x48;
+  callPtr[0x01] = 0xB8;
+  *(void * *)(callPtr + 0x02) = proc;
+
+  callPtr[0x0A] = 0x49;
+  callPtr[0x0B] = 0xB9;
+  *(void * *)(callPtr + 0x0C) = fouthArg;
+
+  callPtr[0x14] = 0xFF;
+  callPtr[0x15] = 0xE0;
+
+  DWORD oldProtect = 0;
+  VirtualProtect(callPtr, 22, PAGE_EXECUTE_READ, &oldProtect);
+  return callPtr;
+}
+
+DWORD scheduler(struct thread_ctx* sCtx) {
+  UMS_SCHEDULER_CONTEXT schedulerContext;
+  SecureZeroMemory(&schedulerContext, sizeof(schedulerContext));
+  schedulerContext.startupInfo.UmsVersion = UMS_VERSION;
+  schedulerContext.startupInfo.CompletionList = 0;
+  schedulerContext.startupInfo.SchedulerProc = x64_bind_4th_arg(schedulerCallback, &schedulerContext);
+  schedulerContext.startupInfo.SchedulerParam = &schedulerContext;
+
+  CreateUmsCompletionList(&schedulerContext.startupInfo.CompletionList);
+  GetUmsCompletionListEvent(schedulerContext.startupInfo.CompletionList, &schedulerContext.completionListEvent);
+
+  int i;
+  for(i = 0; i < 8; i++) {
+    struct thread_ctx* ctx = malloc(sizeof(*ctx));
+    if (ctx == NULL)
+      return UV_ENOMEM;
+
+    ctx->entry = sCtx->entry;
+    ctx->arg = sCtx->arg;
+
+    CloseHandle(begin_ums_worker_thread(schedulerContext.startupInfo.CompletionList, uv__thread_start, ctx, 0));
+  }
+  free(sCtx);
+
+  EnterUmsSchedulingMode(&schedulerContext.startupInfo);
+  DeleteUmsCompletionList(&schedulerContext.startupInfo);
+  return 0;
+}
+
+HANDLE begin_ums_scheduler_thread(void *arglist, unsigned initflag) {
+  return CreateThread(0, 0, scheduler, arglist, initflag, 0);
+}
+
+#endif
 
 int uv_thread_create(uv_thread_t *tid, void (*entry)(void *arg), void *arg) {
   struct thread_ctx* ctx;
@@ -157,6 +369,9 @@ int uv_thread_create(uv_thread_t *tid, void (*entry)(void *arg), void *arg) {
   ctx->entry = entry;
   ctx->arg = arg;
 
+#ifdef USE_USER_MODE_SCHEDUING
+  thread = begin_ums_scheduler_thread(ctx, CREATE_SUSPENDED);
+#else
   /* Create the thread in suspended state so we have a chance to pass
    * its own creation handle to it */   
   thread = (HANDLE) _beginthreadex(NULL,
@@ -165,6 +380,7 @@ int uv_thread_create(uv_thread_t *tid, void (*entry)(void *arg), void *arg) {
                                    ctx,
                                    CREATE_SUSPENDED,
                                    NULL);
+#endif
   if (thread == NULL) {
     err = errno;
     free(ctx);
