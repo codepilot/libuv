@@ -178,14 +178,33 @@ typedef struct _UMS_SCHEDULER_CONTEXT {
   UMS_THREAD_RING threadRing;
 } UMS_SCHEDULER_CONTEXT, *PUMS_SCHEDULER_CONTEXT;
 
-WINBASEAPI BOOL WINAPI CreateUmsThreadContext(_Outptr_ PUMS_CONTEXT *lpUmsThread);
-WINBASEAPI BOOL WINAPI DequeueUmsCompletionListItems(_In_ PUMS_COMPLETION_LIST UmsCompletionList, _In_ DWORD WaitTimeOut, _Out_ PUMS_CONTEXT* UmsThreadList);
-WINBASEAPI PUMS_CONTEXT WINAPI GetNextUmsListItem(_Inout_ PUMS_CONTEXT UmsContext);
+typedef struct _UMS_SYSTEM_THREAD_INFORMATION {
+    ULONG UmsVersion;
+    union {
+        struct {
+            ULONG IsUmsSchedulerThread : 1;
+            ULONG IsUmsWorkerThread : 1;
+        } DUMMYSTRUCTNAME;
+        ULONG ThreadUmsFlags;
+    } DUMMYUNIONNAME;
+} UMS_SYSTEM_THREAD_INFORMATION, *PUMS_SYSTEM_THREAD_INFORMATION;
+
+typedef enum _RTL_UMS_THREAD_INFO_CLASS UMS_THREAD_INFO_CLASS, *PUMS_THREAD_INFO_CLASS;
+
 WINBASEAPI BOOL WINAPI CreateUmsCompletionList(_Outptr_ PUMS_COMPLETION_LIST* UmsCompletionList);
+WINBASEAPI BOOL WINAPI DequeueUmsCompletionListItems(_In_ PUMS_COMPLETION_LIST UmsCompletionList, _In_ DWORD WaitTimeOut, _Out_ PUMS_CONTEXT* UmsThreadList);
 WINBASEAPI BOOL WINAPI GetUmsCompletionListEvent(_In_ PUMS_COMPLETION_LIST UmsCompletionList, _Inout_ PHANDLE UmsCompletionEvent);
-WINBASEAPI BOOL WINAPI EnterUmsSchedulingMode(_In_ PUMS_SCHEDULER_STARTUP_INFO SchedulerStartupInfo);
-WINBASEAPI BOOL WINAPI DeleteUmsCompletionList(_In_ PUMS_COMPLETION_LIST UmsCompletionList);
 WINBASEAPI BOOL WINAPI ExecuteUmsThread(_Inout_ PUMS_CONTEXT UmsThread);
+WINBASEAPI BOOL WINAPI UmsThreadYield(_In_ PVOID SchedulerParam);
+WINBASEAPI BOOL WINAPI DeleteUmsCompletionList(_In_ PUMS_COMPLETION_LIST UmsCompletionList);
+WINBASEAPI PUMS_CONTEXT WINAPI GetCurrentUmsThread(VOID);
+WINBASEAPI PUMS_CONTEXT WINAPI GetNextUmsListItem(_Inout_ PUMS_CONTEXT UmsContext);
+WINBASEAPI BOOL WINAPI QueryUmsThreadInformation(_In_ PUMS_CONTEXT UmsThread, _In_ UMS_THREAD_INFO_CLASS UmsThreadInfoClass, _Out_writes_bytes_to_(UmsThreadInformationLength, *ReturnLength) PVOID UmsThreadInformation, _In_ ULONG UmsThreadInformationLength, _Out_opt_ PULONG ReturnLength);
+WINBASEAPI BOOL WINAPI SetUmsThreadInformation(_In_ PUMS_CONTEXT UmsThread, _In_ UMS_THREAD_INFO_CLASS UmsThreadInfoClass, _In_ PVOID UmsThreadInformation, _In_ ULONG UmsThreadInformationLength);
+WINBASEAPI BOOL WINAPI DeleteUmsThreadContext(_In_ PUMS_CONTEXT UmsThread);
+WINBASEAPI BOOL WINAPI CreateUmsThreadContext(_Outptr_ PUMS_CONTEXT *lpUmsThread);
+WINBASEAPI BOOL WINAPI EnterUmsSchedulingMode(_In_ PUMS_SCHEDULER_STARTUP_INFO SchedulerStartupInfo);
+WINBASEAPI BOOL WINAPI GetUmsSystemThreadInformation(_In_ HANDLE ThreadHandle, _Inout_ PUMS_SYSTEM_THREAD_INFORMATION SystemThreadInfo);
 #endif /* These items should be included from Windows.h */
 
 HANDLE begin_ums_worker_thread(PUMS_COMPLETION_LIST CompletionList, unsigned ( __stdcall *start_address )( void * ), void *arglist, unsigned initflag) {
