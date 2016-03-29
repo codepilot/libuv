@@ -89,6 +89,42 @@ also serve as API specification and usage examples.
 These resources are not handled by libuv maintainers and might be out of
 date. Please verify it before opening new issues.
 
+## Downloading
+
+libuv can be downloaded either from the
+[GitHub repository](https://github.com/libuv/libuv)
+or from the [downloads site](http://dist.libuv.org/dist/).
+
+Starting with libuv 1.7.0, binaries for Windows are also provided. This is to
+be considered EXPERIMENTAL.
+
+Before verifying the git tags or signature files, importing the relevant keys
+is necessary. Key IDs are listed in the
+[MAINTAINERS](https://github.com/libuv/libuv/blob/master/MAINTAINERS.md)
+file, but are also available as git blob objects for easier use.
+
+Importing a key the usual way:
+
+    $ gpg --keyserver pool.sks-keyservers.net \
+      --recv-keys AE9BC059
+
+Importing a key from a git blob object:
+
+    $ git show pubkey-saghul | gpg --import
+
+### Verifying releases
+
+Git tags are signed with the developer's key, they can be verified as follows:
+
+    $ git verify-tag v1.6.1
+
+Starting with libuv 1.7.0, the tarballs stored in the
+[downloads site](http://dist.libuv.org/dist/) are signed and an accompanying
+signature file sit alongside each. Once both the release tarball and the
+signature file are downloaded, the file can be verified as follows:
+
+    $ gpg --verify libuv-1.7.0.tar.gz.sign
+
 ## Build Instructions
 
 For GCC there are two build methods: via autotools or via [GYP][].
@@ -120,10 +156,15 @@ project tree manually:
 
 ### Unix
 
-Run:
+For Debug builds (recommended) run:
 
     $ ./gyp_uv.py -f make
     $ make -C out
+
+For Release builds run:
+
+    $ ./gyp_uv.py -f make
+    $ BUILDTYPE=Release make -C out
 
 Run `./gyp_uv.py -f make -Dtarget_arch=x32` to build [x32][] binaries.
 
@@ -207,3 +248,4 @@ See the [guidelines for contributing][].
 [Visual Studio Express 2010]: http://www.microsoft.com/visualstudio/eng/products/visual-studio-2010-express
 [guidelines for contributing]: https://github.com/libuv/libuv/blob/master/CONTRIBUTING.md
 [libuv_banner]: https://raw.githubusercontent.com/libuv/libuv/master/img/banner.png
+[x32]: https://en.wikipedia.org/wiki/X32_ABI

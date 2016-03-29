@@ -48,6 +48,24 @@ int uv__kqueue_init(uv_loop_t* loop) {
 }
 
 
+int uv__io_check_fd(uv_loop_t* loop, int fd) {
+  struct kevent ev;
+  int rc;
+
+  rc = 0;
+  EV_SET(&ev, fd, EVFILT_READ, EV_ADD, 0, 0, 0);
+  if (kevent(loop->backend_fd, &ev, 1, NULL, 0, NULL))
+    rc = -errno;
+
+  EV_SET(&ev, fd, EVFILT_READ, EV_DELETE, 0, 0, 0);
+  if (rc == 0)
+    if (kevent(loop->backend_fd, &ev, 1, NULL, 0, NULL))
+      abort();
+
+  return rc;
+}
+
+
 void uv__io_poll(uv_loop_t* loop, int timeout) {
   struct kevent events[1024];
   struct kevent* ev;
@@ -241,6 +259,9 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
       if (ev->flags & EV_ERROR)
         revents |= UV__POLLERR;
 
+      if ((ev->flags & EV_EOF) && (w->pevents & UV__POLLRDHUP))
+        revents |= UV__POLLRDHUP;
+
       if (revents == 0)
         continue;
 
@@ -379,6 +400,10 @@ int uv_fs_event_start(uv_fs_event_t* handle,
   if (!(statbuf.st_mode & S_IFDIR))
     goto fallback;
 
+  /* The fallback fd is no longer needed */
+  uv__close(fd);
+  handle->event_watcher.fd = -1;
+
   return uv__fsevents_init(handle);
 
 fallback:
@@ -406,8 +431,12 @@ int uv_fs_event_stop(uv_fs_event_t* handle) {
   uv__free(handle->path);
   handle->path = NULL;
 
-  uv__close(handle->event_watcher.fd);
-  handle->event_watcher.fd = -1;
+  if (handle->event_watcher.fd != -1) {
+    /* When FSEvents is used, we don't use the event_watcher's fd under certain
+     * confitions. (see uv_fs_event_start) */
+    uv__close(handle->event_watcher.fd);
+    handle->event_watcher.fd = -1;
+  }
 
   return 0;
 }

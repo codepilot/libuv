@@ -135,17 +135,6 @@ API
     For :man:`isatty(3)` equivalent functionality use this function and test
     for ``UV_TTY``.
 
-.. c:function:: unsigned int uv_version(void)
-
-    Returns the libuv version packed into a single integer. 8 bits are used for
-    each component, with the patch number stored in the 8 least significant
-    bits. E.g. for libuv 1.2.3 this would return 0x010203.
-
-.. c:function:: const char* uv_version_string(void)
-
-    Returns the libuv version number as a string. For non-release versions
-    "-pre" is appended, so the version number could be "1.2.3-pre".
-
 .. c:function:: int uv_replace_allocator(uv_malloc_func malloc_func, uv_realloc_func realloc_func, uv_calloc_func calloc_func, uv_free_func free_func)
 
     .. versionadded:: 1.6.0
@@ -276,13 +265,31 @@ API
     `uv_os_homedir()` first checks the `HOME` environment variable using
     :man:`getenv(3)`. If `HOME` is not set, :man:`getpwuid_r(3)` is called. The
     user's home directory is stored in `buffer`. When `uv_os_homedir()` is
-    called, `size` indicates the maximum size of `buffer`. On success or
-    `UV_ENOBUFS` failure, `size` is set to the string length of `buffer`.
+    called, `size` indicates the maximum size of `buffer`. On success `size` is set
+    to the string length of `buffer`. On `UV_ENOBUFS` failure `size` is set to the
+    required length for `buffer`, including the null byte.
 
     .. warning::
         `uv_os_homedir()` is not thread safe.
 
     .. versionadded:: 1.6.0
+
+.. c:function:: int uv_os_tmpdir(char* buffer, size_t* size)
+
+    Gets the temp directory. On Windows, `uv_os_tmpdir()` uses `GetTempPathW()`.
+    On all other operating systems, `uv_os_tmpdir()` uses the first environment
+    variable found in the ordered list `TMPDIR`, `TMP`, `TEMP`, and `TEMPDIR`.
+    If none of these are found, the path `"/tmp"` is used, or, on Android,
+    `"/data/local/tmp"` is used. The temp directory is stored in `buffer`. When
+    `uv_os_tmpdir()` is called, `size` indicates the maximum size of `buffer`.
+    On success `size` is set to the string length of `buffer` (which does not
+    include the terminating null). On `UV_ENOBUFS` failure `size` is set to the
+    required length for `buffer`, including the null byte.
+
+    .. warning::
+        `uv_os_tmpdir()` is not thread safe.
+
+    .. versionadded:: 1.9.0
 
 .. uint64_t uv_get_free_memory(void)
 .. c:function:: uint64_t uv_get_total_memory(void)
@@ -299,3 +306,41 @@ API
     .. note::
         Not every platform can support nanosecond resolution; however, this value will always
         be in nanoseconds.
+
+.. c:function:: void uv_print_all_handles(uv_loop_t* loop, FILE* stream)
+
+    Prints all handles associated with the given `loop` to the given `stream`.
+
+    Example:
+
+    ::
+
+        uv_print_all_handles(uv_default_loop(), stderr);
+        /*
+        [--I] signal   0x1a25ea8
+        [-AI] async    0x1a25cf0
+        [R--] idle     0x1a7a8c8
+        */
+
+    The format is `[flags] handle-type handle-address`. For `flags`:
+
+    - `R` is printed for a handle that is referenced
+    - `A` is printed for a handle that is active
+    - `I` is printed for a handle that is internal
+
+    .. warning::
+        This function is meant for ad hoc debugging, there is no API/ABI
+        stability guarantees.
+
+    .. versionadded:: 1.8.0
+
+.. c:function:: void uv_print_active_handles(uv_loop_t* loop, FILE* stream)
+
+    This is the same as :c:func:`uv_print_all_handles` except only active handles
+    are printed.
+
+    .. warning::
+        This function is meant for ad hoc debugging, there is no API/ABI
+        stability guarantees.
+
+    .. versionadded:: 1.8.0

@@ -92,6 +92,7 @@
             'src/win/req.c',
             'src/win/req-inl.h',
             'src/win/signal.c',
+            'src/win/snprintf.c',
             'src/win/stream.c',
             'src/win/stream-inl.h',
             'src/win/tcp.c',
@@ -240,6 +241,7 @@
             '_ALL_SOURCE',
             '_XOPEN_SOURCE=500',
             '_LINUX_SOURCE_COMPAT',
+            '_THREAD_SAFE',
           ],
           'link_settings': {
             'libraries': [
@@ -293,6 +295,7 @@
         'test/test-cwd-and-chdir.c',
         'test/test-default-loop-close.c',
         'test/test-delayed-accept.c',
+        'test/test-eintr-handling.c',
         'test/test-error.c',
         'test/test-embed.c',
         'test/test-emfile.c',
@@ -326,8 +329,10 @@
         'test/test-ping-pong.c',
         'test/test-pipe-bind-error.c',
         'test/test-pipe-connect-error.c',
+        'test/test-pipe-connect-multiple.c',
         'test/test-pipe-connect-prepare.c',
         'test/test-pipe-getsockname.c',
+        'test/test-pipe-pending-instances.c',
         'test/test-pipe-sendmsg.c',
         'test/test-pipe-server-close.c',
         'test/test-pipe-close-stdout-read-stdin.c',
@@ -338,6 +343,7 @@
         'test/test-poll-close-doesnt-corrupt-stack.c',
         'test/test-poll-closesocket.c',
         'test/test-process-title.c',
+        'test/test-queue-foreach-delete.c',
         'test/test-ref.c',
         'test/test-run-nowait.c',
         'test/test-run-once.c',
@@ -356,6 +362,7 @@
         'test/test-tcp-close.c',
         'test/test-tcp-close-accept.c',
         'test/test-tcp-close-while-connecting.c',
+        'test/test-tcp-create-socket-early.c',
         'test/test-tcp-connect-error-after-write.c',
         'test/test-tcp-shutdown-after-write.c',
         'test/test-tcp-flags.c',
@@ -375,6 +382,7 @@
         'test/test-threadpool.c',
         'test/test-threadpool-cancel.c',
         'test/test-thread-equal.c',
+        'test/test-tmpdir.c',
         'test/test-mutexes.c',
         'test/test-thread.c',
         'test/test-barrier.c',
@@ -384,6 +392,7 @@
         'test/test-timer.c',
         'test/test-tty.c',
         'test/test-udp-bind.c',
+        'test/test-udp-create-socket-early.c',
         'test/test-udp-dgram-too-big.c',
         'test/test-udp-ipv6.c',
         'test/test-udp-open.c',
@@ -405,7 +414,8 @@
         [ 'OS=="win"', {
           'sources': [
             'test/runner-win.c',
-            'test/runner-win.h'
+            'test/runner-win.h',
+            'src/win/snprintf.c',
           ],
           'libraries': [ '-lws2_32' ]
         }, { # POSIX
@@ -426,6 +436,9 @@
             '_ALL_SOURCE',
             '_XOPEN_SOURCE=500',
           ],
+        }],
+        ['uv_library=="shared_library"', {
+          'defines': [ 'USING_UV_SHARED=1' ]
         }],
       ],
       'msvs-settings': {
@@ -470,6 +483,7 @@
           'sources': [
             'test/runner-win.c',
             'test/runner-win.h',
+            'src/win/snprintf.c',
           ],
           'libraries': [ '-lws2_32' ]
         }, { # POSIX
@@ -478,7 +492,10 @@
             'test/runner-unix.c',
             'test/runner-unix.h',
           ]
-        }]
+        }],
+        ['uv_library=="shared_library"', {
+          'defines': [ 'USING_UV_SHARED=1' ]
+        }],
       ],
       'msvs-settings': {
         'VCLinkerTool': {

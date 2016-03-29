@@ -391,6 +391,9 @@ int uv__stream_open(uv_stream_t* stream, int fd, int flags) {
   int enable;
 #endif
 
+  if (!(stream->io_watcher.fd == -1 || stream->io_watcher.fd == fd))
+    return -EBUSY;
+
   assert(fd >= 0);
   stream->flags |= flags;
 
@@ -736,19 +739,6 @@ static int uv__handle_fd(uv_handle_t* handle) {
   }
 }
 
-static int uv__getiovmax() {
-#if defined(IOV_MAX)
-  return IOV_MAX;
-#elif defined(_SC_IOV_MAX)
-  static int iovmax = -1;
-  if (iovmax == -1)
-    iovmax = sysconf(_SC_IOV_MAX);
-  return iovmax;
-#else
-  return 1024;
-#endif
-}
-
 static void uv__write(uv_stream_t* stream) {
   struct iovec* iov;
   QUEUE* q;
@@ -789,9 +779,9 @@ start:
 
   if (req->send_handle) {
     struct msghdr msg;
-    char scratch[64];
     struct cmsghdr *cmsg;
     int fd_to_send = uv__handle_fd((uv_handle_t*) req->send_handle);
+    char scratch[64] = {0};
 
     assert(fd_to_send >= 0);
 
@@ -819,7 +809,17 @@ start:
     do {
       n = sendmsg(uv__stream_fd(stream), &msg, 0);
     }
+#if defined(__APPLE__)
+    /*
+     * Due to a possible kernel bug at least in OS X 10.10 "Yosemite",
+     * EPROTOTYPE can be returned while trying to write to a socket that is
+     * shutting down. If we retry the write, we should get the expected EPIPE
+     * instead.
+     */
+    while (n == -1 && (errno == EINTR || errno == EPROTOTYPE));
+#else
     while (n == -1 && errno == EINTR);
+#endif
   } else {
     do {
       if (iovcnt == 1) {
@@ -828,7 +828,17 @@ start:
         n = writev(uv__stream_fd(stream), iov, iovcnt);
       }
     }
+#if defined(__APPLE__)
+    /*
+     * Due to a possible kernel bug at least in OS X 10.10 "Yosemite",
+     * EPROTOTYPE can be returned while trying to write to a socket that is
+     * shutting down. If we retry the write, we should get the expected EPIPE
+     * instead.
+     */
+    while (n == -1 && (errno == EINTR || errno == EPROTOTYPE));
+#else
     while (n == -1 && errno == EINTR);
+#endif
   }
 
   if (n < 0) {
@@ -936,13 +946,14 @@ static void uv__write_callbacks(uv_stream_t* stream) {
 
 uv_handle_type uv__handle_type(int fd) {
   struct sockaddr_storage ss;
+  socklen_t sslen;
   socklen_t len;
   int type;
 
   memset(&ss, 0, sizeof(ss));
-  len = sizeof(ss);
+  sslen = sizeof(ss);
 
-  if (getsockname(fd, (struct sockaddr*)&ss, &len))
+  if (getsockname(fd, (struct sockaddr*)&ss, &sslen))
     return UV_UNKNOWN_HANDLE;
 
   len = sizeof type;
@@ -951,6 +962,14 @@ uv_handle_type uv__handle_type(int fd) {
     return UV_UNKNOWN_HANDLE;
 
   if (type == SOCK_STREAM) {
+#if defined(_AIX)
+    /* on AIX the getsockname call returns an empty sa structure
+     * for sockets of type AF_UNIX.  For all other types it will
+     * return a properly filled in structure.
+     */
+    if (sslen == 0)
+      return UV_NAMED_PIPE;
+#endif
     switch (ss.ss_family) {
       case AF_UNIX:
         return UV_NAMED_PIPE;
@@ -1072,6 +1091,11 @@ static int uv__stream_recv_cmsg(uv_stream_t* stream, struct msghdr* msg) {
 }
 
 
+#ifdef __clang__
+# pragma clang diagnostic push
+# pragma clang diagnostic ignored "-Wgnu-folding-constant"
+#endif
+
 static void uv__read(uv_stream_t* stream) {
   uv_buf_t buf;
   ssize_t nread;
@@ -1176,6 +1200,10 @@ static void uv__read(uv_stream_t* stream) {
   }
 }
 
+
+#ifdef __clang__
+# pragma clang diagnostic pop
+#endif
 
 #undef UV__CMSG_FD_COUNT
 #undef UV__CMSG_FD_SIZE
@@ -1461,7 +1489,7 @@ int uv_try_write(uv_stream_t* stream,
     uv__stream_osx_interrupt_select(stream);
   }
 
-  if (written == 0)
+  if (written == 0 && req_size != 0)
     return -EAGAIN;
   else
     return written;
